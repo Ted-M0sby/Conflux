@@ -1,0 +1,7 @@
+routes:
+  - id: mock
+    path_prefix: /user
+    strip_prefix: false
+    priority: 100
+    targets:
+      - http://mock-backend:8080

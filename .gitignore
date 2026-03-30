@@ -1,0 +1,6 @@
+/nexus
+/nexus.exe
+*.log
+/data/
+/logs/
+.cursor/

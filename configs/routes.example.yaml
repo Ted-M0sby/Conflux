@@ -1,0 +1,14 @@
+# Example: prefix routing for Nexus (copy to routes.yaml or publish to Nacos).
+routes:
+  - id: user
+    path_prefix: /user
+    strip_prefix: false
+    priority: 100
+    targets:
+      - http://127.0.0.1:18081
+  - id: api
+    path_prefix: /api
+    strip_prefix: true
+    priority: 10
+    targets:
+      - http://127.0.0.1:18081

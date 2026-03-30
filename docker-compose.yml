@@ -1,0 +1,66 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: nexus
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./scripts/init_mysql.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 8s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+
+  mock-backend:
+    build:
+      context: ./docker/mock-backend
+    expose:
+      - "8080"
+
+  nexus:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      NEXUS_ADDR: ":8080"
+      NEXUS_ROUTES_FILE: /app/configs/routes.docker.yaml
+      NEXUS_ROUTES_SOURCE: file
+      NEXUS_MYSQL_DSN: root:root@tcp(mysql:3306)/nexus?parseTime=true&loc=Local&charset=utf8mb4
+      NEXUS_REDIS_ADDR: redis:6379
+      NEXUS_ADMIN_TOKEN: dev-admin-token
+      NEXUS_JWT_REQUIRED: "false"
+      NEXUS_RATELIMIT_ENABLE: "true"
+      NEXUS_SENTINEL_ENABLE: "true"
+      NEXUS_HEALTH_HTTP_PATH: /health
+      NEXUS_LB: round_robin
+      NACOS_SERVER_HOSTS: nacos:8848
+      NACOS_ROUTES_DATA_ID: nexus-routes.yaml
+      NACOS_ROUTES_GROUP: DEFAULT_GROUP
+    volumes:
+      - ./configs/routes.docker.yaml:/app/configs/routes.docker.yaml:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mock-backend:
+        condition: service_started
+      redis:
+        condition: service_started
