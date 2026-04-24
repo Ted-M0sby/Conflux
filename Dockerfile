@@ -1,13 +1,15 @@
-FROM golang:1.21-alpine AS build
+FROM alpine:3.19 AS deps
+RUN apk add --no-cache build-base cmake git
+
+FROM deps AS build
 WORKDIR /src
-COPY go.mod ./
 COPY . .
-RUN go mod tidy && CGO_ENABLED=0 go build -o /nexus ./cmd/nexus
+RUN cmake -S . -B build && cmake --build build -j
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates
 WORKDIR /app
-COPY --from=build /nexus /app/nexus
+COPY --from=build /src/build/conflux /app/conflux
 COPY configs /app/configs
 EXPOSE 8080
-ENTRYPOINT ["/app/nexus"]
+ENTRYPOINT ["/app/conflux"]
