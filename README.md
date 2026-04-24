@@ -1,7 +1,5 @@
 # Conflux (C++ Edition)
 
-本项目已整体覆写为 C++ 实现。
-
 ## 功能
 
 - YAML 路由加载（`configs/routes.yaml`）
