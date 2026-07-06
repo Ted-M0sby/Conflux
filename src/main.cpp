@@ -57,6 +57,64 @@ private:
   std::unordered_map<std::string, std::deque<steady_clock::time_point>> m_;
 };
 
+class Metrics {
+public:
+  void record(int status, long long latency_ms, bool limited) {
+    std::lock_guard<std::mutex> g(mu_);
+    ++total_;
+    if (status >= 500) ++upstream_errors_;
+    if (limited) ++rate_limited_;
+    latency_total_ms_ += latency_ms;
+  }
+
+  std::string prometheus() const {
+    std::lock_guard<std::mutex> g(mu_);
+    std::ostringstream out;
+    out << "# TYPE conflux_requests_total counter\n";
+    out << "conflux_requests_total " << total_ << "\n";
+    out << "# TYPE conflux_upstream_errors_total counter\n";
+    out << "conflux_upstream_errors_total " << upstream_errors_ << "\n";
+    out << "# TYPE conflux_rate_limited_total counter\n";
+    out << "conflux_rate_limited_total " << rate_limited_ << "\n";
+    out << "# TYPE conflux_request_latency_ms_avg gauge\n";
+    out << "conflux_request_latency_ms_avg "
+        << (total_ == 0 ? 0 : latency_total_ms_ / total_) << "\n";
+    return out.str();
+  }
+
+private:
+  mutable std::mutex mu_;
+  long long total_ = 0;
+  long long upstream_errors_ = 0;
+  long long rate_limited_ = 0;
+  long long latency_total_ms_ = 0;
+};
+
+struct TargetEndpoint {
+  std::string host;
+  int port = 80;
+};
+
+static bool parse_target(const std::string& target, TargetEndpoint& ep) {
+  auto pos = target.find("://");
+  auto hp = pos == std::string::npos ? target : target.substr(pos + 3);
+  auto slash = hp.find('/');
+  if (slash != std::string::npos) hp = hp.substr(0, slash);
+  auto p2 = hp.rfind(':');
+  ep.host = p2 == std::string::npos ? hp : hp.substr(0, p2);
+  try {
+    ep.port = p2 == std::string::npos ? 80 : std::stoi(hp.substr(p2 + 1));
+  } catch (...) {
+    return false;
+  }
+  return !ep.host.empty() && ep.port > 0;
+}
+
+static std::string query_string(const httplib::Request& req) {
+  auto q = req.target.find('?');
+  return q == std::string::npos ? "" : req.target.substr(q);
+}
+
 static std::string pick_target(const Route& r,
                                const std::string& lb,
                                std::unordered_map<std::string, size_t>& rr,
@@ -78,7 +136,9 @@ int main() {
   if (!table.load_yaml(cfg.routes_file)) return 1;
 
   SlidingWindowLimiter limiter(cfg.rate_limit_rps, cfg.rate_limit_window_sec);
+  Metrics metrics;
   std::unordered_map<std::string, size_t> rr;
+  std::mutex lb_mu;
   std::mt19937 gen{std::random_device{}()};
 
   httplib::Server s;
@@ -118,10 +178,31 @@ int main() {
     res.set_content(out.str(), "application/json");
   });
 
+  s.Get("/metrics", [&](const httplib::Request&, httplib::Response& res) {
+    res.set_content(metrics.prometheus(), "text/plain");
+  });
+
   auto proxy = [&](const httplib::Request& req, httplib::Response& res) {
+    auto start = steady_clock::now();
+    bool limited = false;
+    std::string route_id = "-";
+    std::string target = "-";
+
+    auto finish = [&]() {
+      auto latency = duration_cast<milliseconds>(steady_clock::now() - start).count();
+      metrics.record(res.status, latency, limited);
+      std::cout << req.method << " " << req.target
+                << " route=" << route_id
+                << " target=" << target
+                << " status=" << res.status
+                << " latency_ms=" << latency << "\n";
+    };
+
     if (cfg.rate_limit_enable && !limiter.allow(req.remote_addr)) {
+      limited = true;
       res.status = 429;
       res.set_content(R"({"error":"rate_limit"})", "application/json");
+      finish();
       return;
     }
 
@@ -129,44 +210,59 @@ int main() {
     if (!r) {
       res.status = 404;
       res.set_content("not found", "text/plain");
+      finish();
       return;
     }
+    route_id = r->id;
 
-    auto target = pick_target(*r, cfg.lb, rr, gen);
+    {
+      std::lock_guard<std::mutex> g(lb_mu);
+      target = pick_target(*r, cfg.lb, rr, gen);
+    }
     if (target.empty()) {
       res.status = 502;
       res.set_content("bad gateway", "text/plain");
+      finish();
       return;
     }
 
-    auto pos = target.find("://");
-    auto hp = pos == std::string::npos ? target : target.substr(pos + 3);
-    auto p2 = hp.find(':');
-    auto host = p2 == std::string::npos ? hp : hp.substr(0, p2);
-    int port = p2 == std::string::npos ? 80 : std::stoi(hp.substr(p2 + 1));
+    TargetEndpoint ep;
+    if (!parse_target(target, ep)) {
+      res.status = 502;
+      res.set_content("bad gateway", "text/plain");
+      finish();
+      return;
+    }
 
     std::string out_path = req.path;
     if (r->strip_prefix && out_path.rfind(r->path_prefix, 0) == 0) {
       out_path = out_path.substr(r->path_prefix.size());
       if (out_path.empty() || out_path[0] != '/') out_path = "/" + out_path;
     }
+    out_path += query_string(req);
 
-    httplib::Client cli(host, port);
+    httplib::Client cli(ep.host, ep.port);
+    cli.set_connection_timeout(std::chrono::milliseconds(cfg.proxy_timeout_ms));
+    cli.set_read_timeout(std::chrono::milliseconds(cfg.proxy_timeout_ms));
     httplib::Request up_req;
     up_req.method = req.method;
     up_req.path = out_path;
     up_req.headers = req.headers;
+    up_req.headers.erase("Host");
+    up_req.headers.erase("Connection");
     up_req.body = req.body;
     auto up = cli.send(up_req);
     if (!up) {
       res.status = 502;
       res.set_content("bad gateway", "text/plain");
+      finish();
       return;
     }
 
     res.status = up->status;
     for (auto& h : up->headers) res.set_header(h.first.c_str(), h.second.c_str());
     res.body = up->body;
+    finish();
   };
 
   s.Get(R"(.*)", proxy);

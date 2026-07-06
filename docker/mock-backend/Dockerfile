@@ -3,7 +3,8 @@ RUN apk add --no-cache build-base cmake git
 
 FROM deps AS build
 WORKDIR /src
-COPY . .
+COPY docker/mock-backend .
+COPY third_party /third_party
 RUN cmake -S . -B build && cmake --build build -j
 
 FROM alpine:3.19

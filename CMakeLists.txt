@@ -18,3 +18,16 @@ target_include_directories(conflux PRIVATE
 if (WIN32)
   target_link_libraries(conflux PRIVATE ws2_32)
 endif()
+
+enable_testing()
+
+add_executable(conflux_tests
+  tests/router_tests.cpp
+  src/router.cpp
+)
+
+target_include_directories(conflux_tests PRIVATE
+  src
+)
+
+add_test(NAME router_tests COMMAND conflux_tests)

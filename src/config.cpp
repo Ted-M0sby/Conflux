@@ -26,5 +26,6 @@ Config load_config() {
   c.rate_limit_enable = env_or("NEXUS_RATELIMIT_ENABLE", "true") != "false";
   c.rate_limit_rps = env_int_or("NEXUS_RATELIMIT_RPS", c.rate_limit_rps);
   c.rate_limit_window_sec = env_int_or("NEXUS_RATELIMIT_WINDOW_SEC", c.rate_limit_window_sec);
+  c.proxy_timeout_ms = env_int_or("NEXUS_PROXY_TIMEOUT_MS", c.proxy_timeout_ms);
   return c;
 }

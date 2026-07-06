@@ -1,7 +1,10 @@
 services:
   mock-backend:
     build:
-      context: ./docker/mock-backend
+      context: .
+      dockerfile: docker/mock-backend/Dockerfile
+    environment:
+      MOCK_PORT: 8080
     expose:
       - "8080"
 
@@ -14,6 +17,7 @@ services:
       NEXUS_ADMIN_TOKEN: dev-admin-token
       NEXUS_RATELIMIT_ENABLE: "true"
       NEXUS_LB: round_robin
+      NEXUS_PROXY_TIMEOUT_MS: 3000
     volumes:
       - ./configs/routes.docker.yaml:/app/configs/routes.docker.yaml:ro
     depends_on:

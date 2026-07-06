@@ -11,6 +11,7 @@ struct Config {
   bool rate_limit_enable = true;
   int rate_limit_rps = 100;
   int rate_limit_window_sec = 10;
+  int proxy_timeout_ms = 3000;
 };
 
 Config load_config();
